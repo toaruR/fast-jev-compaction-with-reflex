@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
+  appendHookLog,
   compactSession,
   decisionLog,
   decisionLogLines,
+  HOOK_LOG_PATH,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -50,6 +52,48 @@ function jevFetch(answer: (name: string) => number, bodies: string[] = []) {
     return { status: 200, ok: true, text: JSON.stringify({ answers }) };
   };
 }
+
+describe('appendHookLog', () => {
+  function memoryFs() {
+    const files = new Map<string, string>();
+    return {
+      files,
+      fs: {
+        read: async (path: string) => {
+          const text = files.get(path);
+          if (text === undefined) throw new Error('not found');
+          return text;
+        },
+        write: async (path: string, text: string) => {
+          files.set(path, text);
+        },
+      },
+    };
+  }
+
+  it('appends one NDJSON line per event, oldest first', async () => {
+    const { files, fs } = memoryFs();
+    await appendHookLog(fs.read, fs.write, { event: 'session.compact', verdict: 'compacted' });
+    await appendHookLog(fs.read, fs.write, { event: 'turn.complete', verdict: 'triggered_compact' });
+    const lines = (files.get(HOOK_LOG_PATH) ?? '').trim().split('\n');
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0]!)).toMatchObject({ event: 'session.compact', verdict: 'compacted' });
+    expect(JSON.parse(lines[0]!).timestamp).toEqual(expect.any(String));
+    expect(JSON.parse(lines[1]!)).toMatchObject({ event: 'turn.complete', verdict: 'triggered_compact' });
+  });
+
+  it('never throws, even when the filesystem rejects every call', async () => {
+    const failingRead = async () => {
+      throw new Error('no fs');
+    };
+    const failingWrite = async () => {
+      throw new Error('no fs');
+    };
+    await expect(
+      appendHookLog(failingRead, failingWrite, { event: 'session.compact' }),
+    ).resolves.toBeUndefined();
+  });
+});
 
 describe('hook config', () => {
   it('reads userConfig values and falls back to defaults', () => {
