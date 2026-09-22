@@ -150,9 +150,14 @@ export interface DecisionAsker {
 - **`turn.complete`**:
   - `$.session.usage()` の `context.percent` を評価し、`compactAtPercent`（既定 60%）以上なら `$.session.compact()` を呼んで事前 compaction を発火。
 
-### 7.2 監査ログ — 未実装
-- `docs/specification.md` の旧版は `.reflex/audit.ndjson` への構造化監査ログ（DEF-12: `timestamp`/`session_id`/`reduction_ratio`/`verdict` 等の記録、`auditRetentionDays`/`auditRetentionMaxMb` によるログローテーション）を仕様として記載していたが、`hooks/` と `src/` を `audit` で grep しても該当コードは一切見つからない。**現状は完全に未実装**。
-- 実際に得られる実行時ログは `$.ui.log` / `$.ui.toast`（`notify()`）経由の一過性の UI 通知のみで、永続化されない。`decisionLogLines()` が生成する `decisions: t1:Read:keep/call=0.92/result=0.88 ...` 形式の行がその内容（`UI_LOG_MAX_CHARS=4096` でチャンク分割）。
+### 7.2 発火ログ (`.reflex/hook.log`, `appendHookLog`)
+- **実装箇所**: `hooks/fast-jev.ts` の `appendHookLog(fs, event)`。`$.fs.read`/`$.fs.write`（プロジェクト作業ディレクトリ相対）のみで実装され、Node の `fs` モジュールには依存しない。
+- **ログ出力先**: `.reflex/hook.log`（NDJSON、1 行 1 イベント）。`.gitignore` に追加済みでコミット対象外。
+- **記録タイミングと内容**:
+  - `session.compact` ハンドラが実際に呼ばれた回（成功・閾値未達フォールバック・例外フォールバックの 3 通りすべて）: `{timestamp, event:"session.compact", verdict:"compacted"|"fallback_low_reduction"|"fallback_error", reductionRatio, messagesBefore, messagesAfter?, error?}`。`verdict:"compacted"` の回のみ `decisions: {id, tool, action, keepCall, keepResult}[]`（pinned 除く全候補）も付与し、どの tool call が `keep`/`drop_result`/`drop_call` されたかを事後に追跡できる。
+  - `turn.complete` が実際に `$.session.compact()` を発火させた回のみ（閾値未達でスキップした回は記録しない、ノイズになるため）: `{timestamp, event:"turn.complete", verdict:"triggered_compact", contextPercent, compactAtPercent}`
+- **失敗耐性**: `$.fs` の read/write がいずれも例外を投げても `appendHookLog` は内部で握りつぶし、compaction 自体には一切影響しない（best-effort ロギング）。
+- 旧版のプライバシー保護監査ログ仕様（DEF-12、`session_id`/`request_id`/`duration_ms`/`error_code` の記録、`auditRetentionDays`/`auditRetentionMaxMb` によるログローテーション）は実装されていない。現状は上記の軽量な発火有無ログのみ。
 
 ---
 
@@ -173,7 +178,7 @@ export interface DecisionAsker {
 | **DEF-09** | パッケージマニフェスト適合 | — | `scripts/validate-package-manifest.mjs` は `git ls-files` に存在しない。 | **不在** |
 | **DEF-10** | 単一終了コード検証スクリプト | — | `scripts/reflex-release-gate.mjs` は `git ls-files` に存在しない。 | **不在** |
 | **DEF-11** | 環境変数安全展開 | `hooks/fast-jev.ts` (`getApiKey`) | `REFLEX_API_KEY` のみを `$.env.get`/`$.settings.read` 経由で読む最小実装。ホワイトリスト展開機構ではない。 | 簡素化版が実在（旧 `src/reflex-client.ts` は不在） |
-| **DEF-12** | 監査ログ | — | `.reflex/audit.ndjson` 等の永続ログは未実装。`$.ui.log`/`$.ui.toast` の一過性通知のみ。 | **不在**（詳細: §7.2） |
+| **DEF-12** | 発火ログ | `hooks/fast-jev.ts` (`appendHookLog`) | `.reflex/hook.log`（NDJSON）に compaction 発火の verdict を記録。トランスクリプト本文は含まない軽量版。 | 簡素化版が実在（詳細: §7.2） |
 | **DEF-13** | プロセスクリーンアップ | — | 管理対象の子プロセス自体が存在しないため、プロセスツリー kill ロジックも対象外。 | **不在** |
 | **DEF-14** | 最小削減率保証 | `src/compact.ts` (`reductionRatio`), `hooks/fast-jev.ts` | `reductionRatio < minReductionRatio`（既定 0.25）の場合は変更を破棄し安全フォールバック。 | 実在 |
 | **DEF-15** | 不可逆マイルストーンタグ | Git repository | `reflex-m1-bridge`・`reflex-m2-supervisor`・`reflex-m3-hook`・`reflex-m4-default` タグが実在（`git tag -l 'reflex-*'` で確認）。 | 実在 |

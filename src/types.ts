@@ -42,6 +42,8 @@ export interface ToolCall {
   /** Index of the message holding the tool_result block. */
   resultIndex: number;
   resultChars: number;
+  /** The result's full text, for building a bounded preview in the state. */
+  resultText: string;
   isError: boolean;
   /** In the first or the newest preserved messages; never a candidate. */
   pinned: boolean;

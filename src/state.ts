@@ -9,10 +9,16 @@ import type {
 } from './types.js';
 
 export const STATE_CONTEXT =
-  'A coding assistant conversation is being compacted to free context. `history` is the whole conversation so far, oldest first; tool outputs are replaced by a short `result` note and long texts may be abridged. Each question asks whether one tool call, or the full output of that call, still needs to stay in the history verbatim. Whatever is not kept is deleted permanently, but the assistant can always re-run a tool or re-read a file.';
+  "A coding assistant conversation is being compacted to free context. `history` is the whole conversation so far, oldest first; each tool call's `result` field shows the true output truncated to a head/tail preview when space allows, or a short ok/error and length note when it does not (or when the call is already pinned and not up for a decision), and long texts may be abridged. Each question asks whether one tool call, or the full output of that call, still needs to stay in the history verbatim; judge from what the preview actually shows, not just the call itself. Whatever is not kept is deleted permanently, but the assistant can always re-run a tool or re-read a file for anything beyond what the preview shows.";
 
 /** Successive caps on the serialised tool input included per call. */
 const INPUT_CHARS = [1000, 200, 60] as const;
+/** Successive caps on the result preview shown per call, paired by index with `INPUT_CHARS`. */
+const RESULT_PREVIEW_CHARS = [
+  { head: 400, tail: 150 },
+  { head: 120, tail: 40 },
+  { head: 0, tail: 0 },
+] as const;
 const TEXT_HEAD = 400;
 const TEXT_TAIL = 150;
 
@@ -82,6 +88,7 @@ export function collectToolCalls(
         callIndex,
         resultIndex: found.index,
         resultChars: found.result.text.length,
+        resultText: found.result.text,
         isError: found.result.isError ?? false,
         pinned:
           isPinned(callIndex, messages.length, preserveRecentMessages) ||
@@ -102,8 +109,19 @@ function inputText(input: Record<string, unknown>, limit: number): string {
   return truncate(json, limit);
 }
 
-function resultNote(call: ToolCall): string {
-  return `${call.isError ? 'error' : 'ok'}, ${call.resultChars} chars (omitted)`;
+/**
+ * A pinned call is never up for a `result_*` decision, so it always gets the
+ * terse note; a candidate call gets a head/tail preview of its real output
+ * when `preview` leaves room for one, so the judge has more than the call's
+ * shape to go on. `{ head: 0, tail: 0 }` is the same terse note, on purpose:
+ * it is the floor `fitState` lands on when nothing else fits.
+ */
+function resultPreview(call: ToolCall, preview: { head: number; tail: number }): string {
+  const status = call.isError ? 'error' : 'ok';
+  if (call.pinned || preview.head + preview.tail === 0) {
+    return `${status}, ${call.resultChars} chars (omitted)`;
+  }
+  return `${status}, ${call.resultChars} chars: ${abridge(call.resultText, preview.head, preview.tail)}`;
 }
 
 /** One call as a single line, for when the structured form is too costly. */
@@ -152,6 +170,7 @@ function historyEntries(
   messages: readonly Message[],
   calls: readonly ToolCall[],
   inputChars: number,
+  preview: { head: number; tail: number },
 ): HistoryEntry[] {
   const byMessage = callsByMessage(calls);
   const entries: HistoryEntry[] = [];
@@ -160,7 +179,7 @@ function historyEntries(
       id: call.id,
       tool: call.tool,
       input: inputText(call.input, inputChars),
-      result: resultNote(call),
+      result: resultPreview(call, preview),
     }));
     if (message.text.trim().length === 0 && toolCalls.length === 0) return;
     const entry: HistoryEntry = { i, role: message.role, text: message.text };
@@ -214,8 +233,8 @@ export function fitState(
   let history: HistoryEntry[] = [];
   let perEntry: number[] = [];
   let tokens = 0;
-  const rebuild = (inputChars: number): void => {
-    history = historyEntries(messages, calls, inputChars);
+  const rebuild = (inputChars: number, preview: { head: number; tail: number }): void => {
+    history = historyEntries(messages, calls, inputChars, preview);
     perEntry = history.map(entryTokens);
     tokens = baseTokens + perEntry.reduce((sum, n) => sum + n, 0);
   };
@@ -229,12 +248,12 @@ export function fitState(
     perEntry[index] = now;
   };
 
-  rebuild(INPUT_CHARS[0]);
+  rebuild(INPUT_CHARS[0], RESULT_PREVIEW_CHARS[0]);
   if (fits()) return fitted(history, tokens, 'full');
 
-  for (const limit of INPUT_CHARS.slice(1)) {
-    rebuild(limit);
-    if (fits()) return fitted(history, tokens, `inputs<=${limit}`);
+  for (let stage = 1; stage < INPUT_CHARS.length; stage++) {
+    rebuild(INPUT_CHARS[stage]!, RESULT_PREVIEW_CHARS[stage]!);
+    if (fits()) return fitted(history, tokens, `inputs<=${INPUT_CHARS[stage]}`);
   }
 
   const pinned = (entry: HistoryEntry): boolean =>

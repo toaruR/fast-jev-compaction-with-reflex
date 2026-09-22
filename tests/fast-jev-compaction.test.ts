@@ -120,21 +120,32 @@ describe('tool call collection', () => {
 });
 
 describe('state fitting', () => {
-  it('sends the whole history with tool results replaced by a note', () => {
+  it('sends the whole history with tool results replaced by a bounded head/tail preview', () => {
     const messages = transcript();
     const { state, stage } = fitState(messages, collectToolCalls(messages, 0), fit);
     expect(stage).toBe('full');
     const json = JSON.stringify(state);
-    expect(json).not.toContain('export const a = 1;');
     expect(json).toContain('Never edit anything under src/generated');
     expect(json).toContain('go ahead');
     expect(state.history.map((entry) => entry.i)).toEqual([0, 1, 3, 4, 6, 8, 9]);
-    expect(state.history[1]?.tool_calls?.[0]).toMatchObject({
-      id: 't1',
-      tool: 'Read',
-      result: `ok, ${fileA.length} chars (omitted)`,
-    });
-    expect((state.history[4]?.tool_calls?.[0] as HistoryToolCall).result).toMatch(/^error, /);
+    const previewed = state.history[1]?.tool_calls?.[0] as HistoryToolCall;
+    expect(previewed).toMatchObject({ id: 't1', tool: 'Read' });
+    expect(previewed.result).toMatch(new RegExp(`^ok, ${fileA.length} chars: `));
+    expect(previewed.result).toContain('export const a = 1;');
+    expect(previewed.result).toContain('chars omitted');
+    // A short result fits in full, verbatim, below the truncation floor.
+    expect((state.history[4]?.tool_calls?.[0] as HistoryToolCall).result).toBe(
+      'error, 34 chars: FAIL b.test.ts: expected 2 to be 3',
+    );
+  });
+
+  it('never previews a pinned call, since it is never up for a result decision', () => {
+    const messages = [call('t1', 'Read', { file_path: 'a.ts' }, fileA), result('t1', fileA), message('user', 'go')];
+    const calls = collectToolCalls(messages, 0);
+    expect(calls[0]?.pinned).toBe(true);
+    const { state } = fitState(messages, calls, fit);
+    const pinnedCall = state.history[0]?.tool_calls?.[0] as HistoryToolCall;
+    expect(pinnedCall.result).toBe(`ok, ${fileA.length} chars (omitted)`);
   });
 
   it('defaults the goal to the latest user prompts', () => {
@@ -152,10 +163,10 @@ describe('state fitting', () => {
     ];
     const { state, stage, tokens } = fitState(messages, collectToolCalls(messages, 0), {
       ...fit,
-      maxStateTokens: 300,
+      maxStateTokens: 400,
     });
     expect(stage).toBe('inputs<=200');
-    expect(tokens).toBeLessThanOrEqual(300);
+    expect(tokens).toBeLessThanOrEqual(400);
     expect(state.history[0]?.text).toBe('start');
     expect((state.history[1]?.tool_calls?.[0] as HistoryToolCall).input.length).toBeLessThanOrEqual(200);
   });
@@ -211,9 +222,9 @@ describe('state fitting', () => {
     expect(abridged.state.history[0]?.text).toBe(long(0));
     expect(abridged.state.history[4]?.text).toBe('latest');
 
-    const collapsed = fitState(messages, [], { ...fit, maxStateTokens: 420, preserveRecentMessages: 1 });
+    const collapsed = fitState(messages, [], { ...fit, maxStateTokens: 500, preserveRecentMessages: 1 });
     expect(collapsed.stage).toBe('old messages collapsed');
-    expect(collapsed.tokens).toBeLessThanOrEqual(420);
+    expect(collapsed.tokens).toBeLessThanOrEqual(500);
     expect(collapsed.state.history[1]?.text).toMatch(/^\[… \d+ chars omitted …\]$/);
     expect(collapsed.state.history[0]?.text).toContain('lorem');
     expect(collapsed.state.history[4]?.text).toBe('latest');
