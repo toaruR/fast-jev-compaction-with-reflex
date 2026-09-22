@@ -4,7 +4,7 @@ import type { CompactOptions, CompactResult, Message } from './types.js';
 
 export type CompactMessagesOptions = CompactOptions & JevClientOptions;
 
-/** `compact` with a `JevClient` built from the options (key from `TYPESAFE_API_KEY` by default). */
+/** `compact` against the local reflex-serve daemon, with a `JevClient` built from the options. */
 export function compactMessages(
   messages: readonly Message[],
   options: CompactMessagesOptions = {},

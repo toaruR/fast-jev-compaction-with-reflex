@@ -1,18 +1,24 @@
-# fast-jev-compaction
+# fast-jev-compaction-with-reflex
 
-Claude Code plugin that replaces the compaction summary with Jev decisions:
-every tool call and result is scored in one fast request, stale ones are
-dropped or truncated, everything kept stays verbatim. Also usable as an npm
-library.
+> Fork of [tamaratran/fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction).
+> This fork replaces the hosted TypeSafe Jev API with a local, offline
+> [reflex](reflex/) server — no API key or external network call required.
+
+Claude Code plugin that replaces the compaction summary with Jev-style
+decisions from a local [reflex](reflex/) server: every tool call and result is
+scored in one fast request, stale ones are dropped or truncated, everything
+kept stays verbatim. Also usable as an npm library.
 
 ## What and why
 
 Most context compaction asks an LLM to summarize old turns. A summary is
 lossy: a file path, exact error, constraint, or command can disappear even when
 it matters later. This library never rewrites anything. It only deletes tool
-calls and tool results Jev says are no longer needed, and it asks Jev while
-showing it the whole conversation. User and assistant text stays verbatim and
-in order.
+calls and tool results reflex says are no longer needed, and it asks reflex
+while showing it the whole conversation. User and assistant text stays
+verbatim and in order. Everything runs locally against `reflex-serve`
+(see the [`reflex/`](reflex/) submodule) — no API key or external network call
+is required by default.
 
 The repository is both an npm package (`src/`) and a Claude Code plugin
 (`hooks/`, `.claude-plugin/`) that uses the package to replace Claude Code's
@@ -53,18 +59,24 @@ built-in compaction summary with the original messages.
    removed, untouched messages are returned as the same objects, and no result
    is ever left without its call.
 
-Jev failures, malformed answers, a missing key, or a history that cannot be
-fitted throw; the caller (or the Claude Code hook) decides what to fall back to.
+Reflex failures, malformed answers, or a history that cannot be fitted throw;
+the caller (or the Claude Code hook) decides what to fall back to.
 
 ## Install and usage
 
+This fork is not published to npm; use it directly from a checkout.
+
 ```sh
-npm install fast-jev-compaction
-export TYPESAFE_API_KEY=...
+git clone --recurse-submodules https://github.com/<you>/fast-jev-compaction-with-reflex.git
+cd fast-jev-compaction-with-reflex
+npm install
+npm run build
+
+cd reflex && uv sync && uv run reflex-serve --stable   # once, in another shell
 ```
 
 ```ts
-import { compactMessages, reductionRatio, type Message } from 'fast-jev-compaction';
+import { compactMessages, reductionRatio, type Message } from './fast-jev-compaction-with-reflex/dist/index.js';
 
 const transcript: Message[] = [
   { role: 'user', text: 'Fix the failing test. Never edit src/generated.', toolUses: [] },
@@ -93,16 +105,17 @@ method) and call `compact(messages, asker, options)`; `buildJevRequest` and
 The building blocks (`collectToolCalls`, `fitState`, `batchCalls`,
 `decideCall`, `applyDecisions`) are exported too.
 
-`apiKey` defaults to `process.env.TYPESAFE_API_KEY`. Never commit the key or
-put it in a source file.
+`apiKey` is only needed if `reflex-serve` was started with `--api-key` (or
+`REFLEX_API_KEY` is set); it defaults to unset. Never commit the key or put it
+in a source file.
 
 ## Options
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `apiKey` | `TYPESAFE_API_KEY` | TypeSafe API key (`compactMessages`/`JevClient`) |
-| `model` | `jev-latest` | Jev model name |
-| `baseUrl` | `https://api.typesafe.ai/v1/systemone` | System One endpoint |
+| `apiKey` | unset | Bearer key for a `reflex-serve` daemon started with `--api-key`, or `REFLEX_API_KEY` |
+| `model` | `Qwen/Qwen3.5-4B` | Model name reported to reflex (informational; the daemon serves whatever it loaded) |
+| `baseUrl` | `http://127.0.0.1:8008/v1/systemone` | Local `reflex-serve` endpoint |
 | `fetch` | native `fetch` | Injectable fetch implementation for tests |
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
 | `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
@@ -139,24 +152,26 @@ Function hooks are an early-access Claude Code feature (2.1.274+), so the
 opt-in flag must be set wherever Claude Code runs, e.g. in `~/.claude/settings.json`:
 
 ```json
-{ "env": { "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1", "TYPESAFE_API_KEY": "<your key>" } }
+{ "env": { "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1" } }
 ```
 
-Then add this repository as a plugin marketplace and install the plugin,
-either from the shell or as slash commands inside a session:
+Then start `reflex-serve` locally (`cd reflex && uv run reflex-serve --stable`)
+and add this local checkout as a plugin marketplace, either from the shell or
+as slash commands inside a session:
 
 ```sh
-claude plugin marketplace add tamaratran/fast-jev-compaction
-claude plugin install fast-jev-compaction@fast-jev-compaction
+claude plugin marketplace add /path/to/fast-jev-compaction
+claude plugin install fast-jev-compaction-with-reflex@fast-jev-compaction-with-reflex
 ```
 
 The install prompts for the plugin options (API key, thresholds, `truncateHeadChars`,
-…); leave them at their defaults to use `TYPESAFE_API_KEY` from the environment.
+…); leave the API key unset unless `reflex-serve` was started with `--api-key`.
 Restart Claude Code or run `/reload-plugins`. From then on `/compact` (and
-auto-compaction) goes through Jev: the toast reads
+auto-compaction) goes through the local reflex server: the toast reads
 `fast-jev-compaction: kept N/M messages, no summary (…)` when the pruned history
-replaced the built-in summary, or `fallback to built-in summary (…)` when Jev
-could not remove enough (short sessions, or when it fails).
+replaced the built-in summary, or `fallback to built-in summary (…)` when
+reflex could not remove enough (short sessions, or when it fails, e.g. because
+`reflex-serve` is not running).
 
 To run from a checkout without installing: `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude --plugin-dir .`
 from the repository root. No publishing step is required; the marketplace is
@@ -170,11 +185,11 @@ npm run typecheck        # library + hook
 npm test
 npm run build
 npm run validate:plugin  # claude plugin validate
-TYPESAFE_API_KEY="$(cat ~/.typesafe_key)" npm run demo
+npm run demo              # needs `reflex-serve` running locally (see above)
 ```
 
-The unit tests use a fake Jev and never contact TypeSafe. The demo is the live
-network check.
+The unit tests use a fake reflex asker and never contact a real server. The
+demo is the live check against `reflex-serve`.
 
 ## Animated demo (macOS)
 
