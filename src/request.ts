@@ -1,7 +1,8 @@
 import type { JevAnswer, JevQuestions, JevResponse, JevState } from './types.js';
 
-export const SYSTEM_ONE_URL = 'https://api.typesafe.ai/v1/systemone';
-export const DEFAULT_MODEL = 'jev-latest';
+/** Local `reflex-serve` daemon (`reflex/`), a drop-in replacement for Jev's hosted endpoint. */
+export const SYSTEM_ONE_URL = 'http://127.0.0.1:8008/v1/systemone';
+export const DEFAULT_MODEL = 'Qwen/Qwen3.5-4B';
 
 export interface JevRequest {
   url: string;
@@ -13,20 +14,20 @@ export interface JevRequest {
 /** The HTTP request for one Jev call, for any fetch-like transport. */
 export function buildJevRequest(
   params: {
-    apiKey: string;
+    /** Only reflex-serve daemons started with `--api-key`/`REFLEX_API_KEY` need this. */
+    apiKey?: string;
     model?: string;
     baseUrl?: string;
   },
   state: JevState,
   questions: JevQuestions,
 ): JevRequest {
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (params.apiKey) headers.authorization = `Bearer ${params.apiKey}`;
   return {
     url: params.baseUrl ?? SYSTEM_ONE_URL,
     method: 'POST',
-    headers: {
-      authorization: `Bearer ${params.apiKey}`,
-      'content-type': 'application/json',
-    },
+    headers,
     body: JSON.stringify({
       model: params.model ?? DEFAULT_MODEL,
       state,
@@ -35,20 +36,20 @@ export function buildJevRequest(
   };
 }
 
-/** Validates a Jev response body; throws on anything but an `answers` object. */
+/** Validates a reflex response body; throws on anything but an `answers` object. */
 export function parseJevResponse(
   status: number,
   ok: boolean,
   text: string,
 ): JevResponse {
   if (!ok) {
-    throw new Error(`Jev request failed (${status}): ${text.slice(0, 200)}`);
+    throw new Error(`reflex request failed (${status}): ${text.slice(0, 200)}`);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    throw new Error('Jev returned malformed JSON');
+    throw new Error('reflex returned malformed JSON');
   }
   if (
     parsed === null ||
@@ -57,7 +58,7 @@ export function parseJevResponse(
     parsed.answers === null ||
     typeof parsed.answers !== 'object'
   ) {
-    throw new Error('Jev response is missing answers');
+    throw new Error('reflex response is missing answers');
   }
   return parsed as JevResponse;
 }
@@ -74,7 +75,7 @@ export function noulAnswer(
     typeof answer.noul !== 'number' ||
     !Number.isFinite(answer.noul)
   ) {
-    throw new Error(`Invalid Jev answer for ${name}`);
+    throw new Error(`Invalid reflex answer for ${name}`);
   }
   return answer.noul;
 }

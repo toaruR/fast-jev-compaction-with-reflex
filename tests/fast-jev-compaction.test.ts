@@ -5,7 +5,6 @@ import {
   buildJevRequest,
   collectToolCalls,
   compact,
-  compactMessages,
   decideCall,
   estimateTokens,
   fitState,
@@ -384,7 +383,7 @@ describe('compact', () => {
       ask: async () => ({ answers: { call_t1: { noul: 0.5 } } }),
     };
     await expect(compact(transcript(), broken, { preserveRecentMessages: 1 })).rejects.toThrow(
-      /Invalid Jev answer/,
+      /Invalid reflex answer/,
     );
   });
 });
@@ -394,10 +393,10 @@ describe('HTTP client', () => {
     const request = buildJevRequest({ apiKey: 'k' }, { a: 1 }, {
       q: { type: 'noul', instructions: 'x' },
     });
-    expect(request.url).toBe('https://api.typesafe.ai/v1/systemone');
+    expect(request.url).toBe('http://127.0.0.1:8008/v1/systemone');
     expect(request.headers.authorization).toBe('Bearer k');
     expect(JSON.parse(request.body)).toEqual({
-      model: 'jev-latest',
+      model: 'Qwen/Qwen3.5-4B',
       state: { a: 1 },
       questions: { q: { type: 'noul', instructions: 'x' } },
     });
@@ -410,24 +409,23 @@ describe('HTTP client', () => {
     expect(parseJevResponse(200, true, '{"answers":{}}')).toEqual({ answers: {} });
   });
 
-  it('asks over fetch and refuses to run without a key', async () => {
+  it('asks over fetch, with an optional key for the local reflex-serve daemon', async () => {
     const bodies: string[] = [];
-    const client = new JevClient({
-      apiKey: 'k',
-      model: 'jev-test',
-      fetch: (async (_url: string | URL | Request, init?: RequestInit) => {
-        bodies.push(String(init?.body));
-        return new Response(JSON.stringify({ answers: { q: { noul: 0.4 } } }), { status: 200 });
-      }) as typeof fetch,
-    });
+    const headers: (Record<string, string> | undefined)[] = [];
+    const fetchFn = (async (_url: string | URL | Request, init?: RequestInit) => {
+      bodies.push(String(init?.body));
+      headers.push(init?.headers as Record<string, string> | undefined);
+      return new Response(JSON.stringify({ answers: { q: { noul: 0.4 } } }), { status: 200 });
+    }) as typeof fetch;
+
+    const client = new JevClient({ apiKey: 'k', model: 'jev-test', fetch: fetchFn });
     const response = await client.ask('state', { q: { type: 'noul', instructions: 'x' } });
     expect(response.answers.q).toEqual({ noul: 0.4 });
     expect(JSON.parse(bodies[0]!).model).toBe('jev-test');
+    expect(headers[0]?.authorization).toBe('Bearer k');
 
-    const keyless = new JevClient({ apiKey: '' });
-    await expect(keyless.ask('s', {})).rejects.toThrow(/TYPESAFE_API_KEY/);
-    await expect(
-      compactMessages(transcript(), { apiKey: '', preserveRecentMessages: 1 }),
-    ).rejects.toThrow(/TYPESAFE_API_KEY/);
+    const keyless = new JevClient({ apiKey: '', fetch: fetchFn });
+    await keyless.ask('s', {});
+    expect(headers[1]?.authorization).toBeUndefined();
   });
 });

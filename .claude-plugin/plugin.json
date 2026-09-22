@@ -1,19 +1,19 @@
 {
-  "name": "fast-jev-compaction",
+  "name": "fast-jev-compaction-with-reflex",
   "version": "0.3.0",
   "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
   "license": "MIT",
   "userConfig": {
     "apiKey": {
       "type": "string",
-      "title": "TypeSafe API key",
-      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
+      "title": "Reflex API key",
+      "description": "Bearer key for a reflex-serve daemon started with --api-key. Leave unset for a local, unauthenticated server, or to use REFLEX_API_KEY.",
       "sensitive": true
     },
     "keepThreshold": {
       "type": "number",
       "title": "Keep threshold",
-      "description": "Minimum Jev probability that a tool call or tool result is still needed; below it the item is removed.",
+      "description": "Minimum reflex probability that a tool call or tool result is still needed; below it the item is removed.",
       "default": 0.5
     },
     "preserveRecentMessages": {
@@ -36,27 +36,27 @@
     },
     "maxStateTokens": {
       "type": "number",
-      "title": "Maximum Jev state tokens",
-      "description": "Estimated token budget for the conversation state sent with every Jev request.",
+      "title": "Maximum reflex state tokens",
+      "description": "Estimated token budget for the conversation state sent with every reflex request.",
       "default": 25000
     },
     "maxRequestTokens": {
       "type": "number",
-      "title": "Maximum Jev request tokens",
-      "description": "Estimated token budget for state plus questions in one Jev request.",
+      "title": "Maximum reflex request tokens",
+      "description": "Estimated token budget for state plus questions in one reflex request.",
       "default": 30000
     },
     "truncateHeadChars": {
       "type": "number",
       "title": "Truncated tool result head",
-      "description": "Characters of a tool result kept when Jev decides its full output is no longer needed; 0 keeps only the note.",
+      "description": "Characters of a tool result kept when reflex decides its full output is no longer needed; 0 keeps only the note.",
       "default": 300
     },
     "model": {
       "type": "string",
-      "title": "Jev model",
-      "description": "TypeSafe Jev model name.",
-      "default": "jev-latest"
+      "title": "Reflex model",
+      "description": "Model name reported to the reflex-serve daemon (informational only; the daemon serves whatever it was started with).",
+      "default": "Qwen/Qwen3.5-4B"
     }
   }
 }

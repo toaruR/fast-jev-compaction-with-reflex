@@ -87,8 +87,8 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   return config;
 }
 
-/** A `JevAsker` over the engine's `$.http.fetch`. */
-export function jevAsker(fetchFn: HookFetch, apiKey: string, model: string): JevAsker {
+/** A `JevAsker` over the engine's `$.http.fetch`, talking to the local reflex-serve daemon. */
+export function jevAsker(fetchFn: HookFetch, apiKey: string | undefined, model: string): JevAsker {
   return {
     async ask(state, questions) {
       const request = buildJevRequest({ apiKey, model }, state, questions);
@@ -161,14 +161,17 @@ export type SessionCompaction = {
   messages: SessionMessage[];
 };
 
-/** Runs the library over a session transcript; throws when the key is missing or Jev fails. */
+/** Runs the library over a session transcript against the local reflex-serve daemon. */
 export async function compactSession(
   messages: readonly SessionMessage[],
   config: HookConfig,
   fetchFn: HookFetch,
 ): Promise<SessionCompaction> {
-  if (!config.apiKey) throw new Error('TYPESAFE_API_KEY is not configured');
-  const result = await compact(messages, jevAsker(fetchFn, config.apiKey, config.model), config);
+  const result = await compact(
+    messages,
+    jevAsker(fetchFn, config.apiKey, config.model),
+    config,
+  );
   return { result, messages: toSessionMessages(messages, result.messages) };
 }
 
@@ -232,12 +235,12 @@ async function getApiKey(
   config: HookConfig,
 ): Promise<string | undefined> {
   if (config.apiKey) return config.apiKey;
-  const fromEnv = await $.env.get('TYPESAFE_API_KEY');
+  const fromEnv = await $.env.get('REFLEX_API_KEY');
   if (fromEnv) return fromEnv;
   const settings = await $.settings.read();
   const env = settings['env'];
   if (env && typeof env === 'object') {
-    const value = (env as Record<string, unknown>)['TYPESAFE_API_KEY'];
+    const value = (env as Record<string, unknown>)['REFLEX_API_KEY'];
     if (typeof value === 'string' && value) return value;
   }
   return undefined;
