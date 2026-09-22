@@ -47,6 +47,40 @@ export type HookConfig = CompactOptions & {
   model: string;
 };
 
+/** The shape of `$.fs.read`, so the log can be written without an engine. */
+export type HookFsRead = (path: string) => Promise<string>;
+/** The shape of `$.fs.write`, so the log can be written without an engine. */
+export type HookFsWrite = (path: string, text: string) => Promise<void>;
+
+/** NDJSON log of every time a hook actually intercepted an event, one line per event. */
+export const HOOK_LOG_PATH = '.reflex/hook.log';
+
+/**
+ * Appends one NDJSON line to `HOOK_LOG_PATH`, so whether `session.compact` /
+ * `turn.complete` actually fired can be checked after the fact instead of
+ * only through the ephemeral `$.ui.log`/`$.ui.toast` notices. Best-effort:
+ * a logging failure (missing file, read-only filesystem, ...) is swallowed so
+ * it never breaks the hook it is instrumenting.
+ */
+export async function appendHookLog(
+  read: HookFsRead,
+  write: HookFsWrite,
+  event: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const line = JSON.stringify({ timestamp: new Date().toISOString(), ...event });
+    let existing = '';
+    try {
+      existing = await read(HOOK_LOG_PATH);
+    } catch {
+      existing = '';
+    }
+    await write(HOOK_LOG_PATH, `${existing}${line}\n`);
+  } catch {
+    // best-effort: logging must never break compaction
+  }
+}
+
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
   const value = options[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -271,19 +305,60 @@ export const register: Register = (on: On, options: PluginOptions) => {
         return { status: response.status, ok: response.ok, text: response.text };
       });
       for (const line of decisionLogLines(result)) $.ui.log(line);
-      if (reductionRatio(result) < config.minReductionRatio) {
+      const ratio = reductionRatio(result);
+      if (ratio < config.minReductionRatio) {
+        await appendHookLog(
+          (p) => $.fs.read(p),
+          (p, t) => $.fs.write(p, t),
+          {
+            event: 'session.compact',
+            verdict: 'fallback_low_reduction',
+            reductionRatio: ratio,
+            minReductionRatio: config.minReductionRatio,
+            messagesBefore: event.messages.length,
+          },
+        );
         notify(
           $,
           `fallback to built-in summary (below ${percent(config.minReductionRatio)} minimum: ${summarize(result)})`,
         );
         return next(event);
       }
+      await appendHookLog(
+        (p) => $.fs.read(p),
+        (p, t) => $.fs.write(p, t),
+        {
+          event: 'session.compact',
+          verdict: 'compacted',
+          reductionRatio: ratio,
+          messagesBefore: event.messages.length,
+          messagesAfter: messages.length,
+          decisions: result.decisions
+            .filter((d) => d.reason !== 'pinned')
+            .map((d) => ({
+              id: d.id,
+              tool: d.tool,
+              action: d.action,
+              keepCall: d.keepCall,
+              keepResult: d.keepResult,
+            })),
+        },
+      );
       notify(
         $,
         `kept ${messages.length}/${event.messages.length} messages, no summary (${summarize(result)})`,
       );
       return { messages };
     } catch (error) {
+      await appendHookLog(
+        (p) => $.fs.read(p),
+        (p, t) => $.fs.write(p, t),
+        {
+          event: 'session.compact',
+          verdict: 'fallback_error',
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
       notify(
         $,
         `fallback to built-in summary (${error instanceof Error ? error.message : String(error)})`,
@@ -298,6 +373,16 @@ export const register: Register = (on: On, options: PluginOptions) => {
       const { context } = await $.session.usage();
       if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);
       compacting = true;
+      await appendHookLog(
+        (p) => $.fs.read(p),
+        (p, t) => $.fs.write(p, t),
+        {
+          event: 'turn.complete',
+          verdict: 'triggered_compact',
+          contextPercent: context.percent,
+          compactAtPercent: configured.compactAtPercent,
+        },
+      );
       await $.session.compact();
     } catch (error) {
       $.ui.log(
