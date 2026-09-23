@@ -138,6 +138,74 @@ export interface DecisionAsker {
 - 圧縮前後の文字数から削減率 `reductionRatio = 1 - (afterChars / beforeChars)` を算出。
 - `reductionRatio < minReductionRatio`（既定 0.25）の場合は「圧縮効果不十分」とみなし、変更を破棄してフォールバックする。
 
+### 6.3 `noul` 判定のキャリブレーション問題（未解決、2026-09-23 調査）
+
+`reflex-serve`（`Qwen/Qwen3.5-4B`）が返す `keepCall`/`keepResult` は、実運用・合成テストの両方で **`keepThreshold`（既定 0.5）を大きく上回る側に偏り、内容の新旧・要否をほとんど弁別できていない** ことが判明した。以下はその根拠と、未解決の論点。
+
+#### 証拠 1: 実セッションでの `fallback_low_reduction` 連発
+
+`.reflex/hook.log` の実例（いずれも `/compact` 実行）:
+
+| 時刻 | messagesBefore | 候補数 | reductionRatio | 備考 |
+|---|---|---|---|---|
+| 2026-09-23 03:49 | 196 | (ログ修正前で未記録) | 0 | §7.2 のログ修正前のため per-call 内訳なし |
+| 2026-09-23 04:03 | 60 | 17 | 0 | **17件全て `keep`**。`keepResult` は 0.562〜0.939 の範囲で、最低値でも閾値 0.5 を上回る |
+| 2026-09-23 04:36 | 42 | 5 | 0.069 | 4件 `keep` + 1件 `drop_result`。閾値 0.25 未満で結局フォールバック |
+
+3回とも「本当にそのセッションの内容が全部必要だったから」という可能性を排定できなかったため、証拠2の合成テストを実施した。
+
+#### 証拠 2: 合成トランスクリプトによる意図的な陳腐化コンテンツの混入テスト
+
+`compactMessages()`（`preserveRecentMessages: 2`）に対し、明らかに不要な重複・陳腐化コールを意図的に混ぜた合成トランスクリプト（同一 `ls src/` を3連続、バグ修正前後で内容が変わる `grep`、修正前の失敗テスト実行など計7件の `stale` ラベル + バグ修正 `Edit` や修正後のテスト実行など5件の `needed` ラベル、計12候補）を実際の `reflex-serve` へ投げた（テストスクリプトは使い捨てで `examples/` には残していない）。
+
+結果: **12候補全てが `keep` 判定、`reductionRatio: 0%`**。
+
+| id | tool | ラベル | keepResult |
+|---|---|---|---|
+| t1 | Bash (`ls` ×1) | stale | 0.798 |
+| t2 | Bash (`ls` ×2) | stale | 0.755 |
+| t3 | Bash (`ls` ×3) | stale | 0.755 |
+| t4 | Bash (`grep`修正前) | stale | 0.818 |
+| t5 | Edit (バグ修正) | needed | 0.798 |
+| t6 | Bash (`grep`修正後) | stale | 0.818 |
+| t7 | Bash (テスト失敗、修正前) | stale | 0.818 |
+| t8 | Bash (テスト成功、修正後) | needed | 0.881 |
+| t9 | Bash (`git status` ×1) | stale | 0.777 |
+| t10 | Bash (`git status` ×2) | stale | 0.706 |
+| t11 | Read (設定ファイル) | needed | 0.867 |
+| t12 | Bash (`npm test`) | needed | 0.893 |
+
+stale 系は 0.706〜0.818、needed 系は 0.798〜0.893 で、方向性としては needed がやや高いものの **0.798〜0.818 で完全に重なっており**、`keepThreshold` をどこに引いても stale/needed を安全に分離できない。
+
+#### 証拠 3: `keepResult` が少数の離散値の使い回しに見える
+
+`.reflex/hook.log` に記録された全 `keepResult`（22件、証拠1の後半2回分）を集計すると:
+
+| 値 | 出現回数 |
+|---|---|
+| 0.562177 | 6 |
+| 0.679179 | 5 |
+| 0.705785 | 3 |
+| 0.622459 | 2 |
+| 0.754915 / 0.651355 / 0.592667 / 0.531209 / 0.5 / 0.468791 | 各1 |
+
+全く別のセッション・別の質問文言・別のツール呼び出しにまたがって **小数点6桁まで完全一致する値** が繰り返し出現している。証拠2の合成テストでも同様に複数コールで値が一致していた（0.798 が t1 と t5、0.818 が t4/t6/t7 で一致）。これは内容ごとに滑らかに変化する連続確率というより、モデルが少数の離散的な自信度ティアのどれかを選んでいるだけで、質問対象の具体的な中身（stale か needed か）にはほとんど反応していない可能性を示唆する。証拠2で見えた「needed がやや高め」という弱い傾向も、内容理解の結果ではなくこの離散ティアの偶然の分布による可能性を排除できていない。
+
+#### 証拠 4: ビルド鮮度・モデル再ロードの否定（交絡要因の切り分け）
+
+証拠1（本番、プラグインキャッシュ経由）と証拠2（合成テスト、`src/` を `tsx` で直接実行）が同じロジックを比較しているか、また `reflex-serve` 側の再ロードが値を変えていないかを確認した。
+
+- **ビルド鮮度**: `dist/compact.js`（2026-09-23 12:40:11）は `src/compact.ts`（12:39:57）より新しく再ビルド済みで、`~/.claude/plugins/cache/fast-jev-compaction-with-reflex/.../dist/compact.js` と `diff` で完全一致。証拠1・証拠2は同一ロジックを見ており、ビルドのズレによる交絡はない。
+- **`reflex-serve` の再ロードなし**: `.reflex/reflex-serve.log` では 2026-09-23 12:42:05 に `Qwen/Qwen3.5-4B` を一度ロードしたきり、証拠1・証拠2に対応する全リクエスト（12:49〜14:20）は同一プロセス・同一ロード状態で応答している。モデルの再ロード・再コンパイルによる数値の揺れではない。
+- **副産物の発見（`no adapter, no calibration file`）**: `docs/ARCHITECTURE.md:144` および `reflex/README.md:99` に明記の通り、このデプロイは `frozen Qwen3.5-4B, no adapter, no calibration file` で稼働している。`reflex/src/reflex/readout.py` の `Calibration`/`calibration_head.py`（質問の kind・log(選択肢数)・log(state tokens)・エントロピー・logit マージンから温度を予測する較正ヘッド）は **calibration.json が存在する場合のみ有効**（`engine.py` の `_sibling_calibration` 経由）であり、今回の構成では発火していない（`cal = Calibration()` のデフォルト、per-primitive 温度 1.0 の未較正状態）。つまり証拠3の離散値は温度較正の量子化アーティファクトではなく、**LoRA アダプタでこのタスク向けに一切ファインチューニングされていない素の instruct モデルが、ほぼ同一の state・似た質問文言に対して生 logits レベルで似た出力を返しているだけ**、というより単純な説明で足りる。
+
+#### 未解決の論点・次のアクション候補
+
+- ~~未検証: `reflex/src/reflex/engine.py` 等で `noul` の確率をどう計算しているか~~ → 証拠4で判明: `calibration_head.py` による温度較正は今回の構成では無効（`no adapter, no calibration file`）。離散値は較正の量子化ではなく、素の frozen モデルの raw logits がほぼ同一の state・類似の質問文言に対して似た出力を返す結果と考えられる。
+- `keepThreshold` を単純に引き上げる対処は、stale/needed のティアが重なっている（証拠2）ため安全に機能しない可能性が高い。
+- 切り分けが必要な代替仮説: (a) `Qwen/Qwen3.5-4B` 自体の能力不足（無較正・無アダプタの素のモデルでは尚更）、(b) `questionsFor`（`src/compact.ts`）の質問文言が判別しやすい表現になっていない、(c) 全コールに対して同一の完全な `state` を repeat して送る設計（§本節冒頭）が、個々のコールの相対的な重要度を判断させる情報として不十分。`reflex/README.md:275` にある `--adapter`/`--calibration` オプション（LoRA アダプタ + 較正ファイルを指定するモード）を試す余地は未検証。
+- 現時点の結論: **この構成（`Qwen/Qwen3.5-4B` を無アダプタ・無較正のまま + reflex の `noul` 確信度をそのまま `keepThreshold` と比較する方式）は、コンパクションの要否判定として信頼性のある結果を返せていない。**
+
 ---
 
 ## 7. Claude Code Hook 統合 (`hooks/fast-jev.ts`, `hooks/hooks.json`)

@@ -4,6 +4,17 @@
 > This fork replaces the hosted TypeSafe Jev API with a local, offline
 > [reflex](reflex/) server — no API key or external network call required.
 
+> [!WARNING]
+> The default `reflex-serve` setup (frozen `Qwen/Qwen3.5-4B`, no LoRA adapter,
+> no calibration file) has **not** been shown to distinguish stale from needed
+> tool calls: a synthetic-transcript test with deliberately redundant content
+> still scored every candidate above `keepThreshold`, and `keepResult` values
+> repeat identically to six decimal places across unrelated sessions. In
+> practice `/compact` mostly falls back to Claude Code's built-in summary
+> (`reductionRatio` below the 0.25 minimum). See
+> [`docs/specification.md` §6.3](docs/specification.md) for the evidence;
+> `--adapter`/`--calibration` (untested here) may fix this.
+
 Claude Code plugin that replaces the compaction summary with Jev-style
 decisions from a local [reflex](reflex/) server: every tool call and result is
 scored in one fast request, stale ones are dropped or truncated, everything
@@ -32,7 +43,7 @@ built-in compaction summary with the original messages.
 2. The **state** sent to Jev is the whole conversation so far, oldest first,
    with every tool result replaced by a short note (`ok, 4213 chars (omitted)`).
    Tool inputs are included, texts are included, nothing is summarized.
-3. The state is fitted into `maxStateTokens` (25k by default) in stages, each
+3. The state is fitted into `maxStateTokens` (4k by default) in stages, each
    applied only if the previous one was not enough: tool inputs truncated to
    1000, then 200, then 60 characters; long texts abridged to head + tail,
    oldest non-pinned messages first; old non-pinned messages collapsed to a
@@ -47,9 +58,9 @@ built-in compaction summary with the original messages.
    **result** stay verbatim (its contents are still needed and re-running the
    tool would not do).
 5. Questions are split into as many requests as needed so state plus questions
-   stays under `maxRequestTokens` (30k by default, under Jev's 32k request
-   limit). The same full state is resent with every request; requests run
-   concurrently and their answers are merged.
+   stays under `maxRequestTokens` (6k by default, under reflex-serve's default
+   `--max-pack-tokens 8192`). The same full state is resent with every
+   request; requests run concurrently and their answers are merged.
 6. Decisions per call, against `keepThreshold`:
    - `keepResult ≥ threshold` → keep call and result;
    - else `keepCall ≥ threshold` → keep the call, truncate the result to its
@@ -120,8 +131,8 @@ in a source file.
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
 | `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
 | `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
-| `maxStateTokens` | `25000` | Estimated token ceiling for the state |
-| `maxRequestTokens` | `30000` | Estimated ceiling for state plus one batch of questions |
+| `maxStateTokens` | `4000` | Estimated token ceiling for the state |
+| `maxRequestTokens` | `6000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
 
 `result.stats` reports message and character counts before and after, the

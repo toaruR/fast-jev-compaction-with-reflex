@@ -18,8 +18,11 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   goal: '',
   keepThreshold: 0.5,
   preserveRecentMessages: 6,
-  maxStateTokens: 25_000,
-  maxRequestTokens: 30_000,
+  // Sized against reflex-serve's own default `--max-pack-tokens 8192` (a 12GB-GPU
+  // budget), not the old remote Jev API's 32k context; the old 25k/30k defaults
+  // packed one giant request that reflex-serve rejected with a 529 OOM.
+  maxStateTokens: 4_000,
+  maxRequestTokens: 6_000,
   truncateHeadChars: 300,
 };
 
@@ -272,10 +275,13 @@ export async function compact(
     const state = fitState(messages, calls, resolved);
     fitted = state;
     batches = batchCalls(candidates, state.tokens, resolved);
-    const answered = await Promise.all(
-      batches.map((batch) => askBatch(asker, state.state, batch)),
-    );
-    for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
+    // Sequential, not Promise.all: reflex-serve answers one request at a time (a lock
+    // serializes its GPU work), so firing every batch at once only lets later batches'
+    // fetch timeouts burn down while queued behind earlier ones still being computed.
+    for (const batch of batches) {
+      const answered = await askBatch(asker, state.state, batch);
+      for (const [id, answer] of answered) answers.set(id, answer);
+    }
   }
 
   const decisions = calls.map((call) =>

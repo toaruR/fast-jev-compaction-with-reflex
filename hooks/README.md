@@ -53,8 +53,8 @@ The plugin declares these `userConfig` values in
 | `preserveRecentMessages` | `6` |
 | `compactAtPercent` | `60` |
 | `minReductionRatio` | `0.25` |
-| `maxStateTokens` | `25000` |
-| `maxRequestTokens` | `30000` |
+| `maxStateTokens` | `4000` |
+| `maxRequestTokens` | `6000` |
 | `truncateHeadChars` | `300` |
 | `model` | `Qwen/Qwen3.5-4B` |
 

@@ -5,6 +5,7 @@ import {
   decisionLog,
   decisionLogLines,
   HOOK_LOG_PATH,
+  register,
   resolveHookConfig,
   summarize,
   toSessionMessages,
@@ -92,6 +93,71 @@ describe('appendHookLog', () => {
     await expect(
       appendHookLog(failingRead, failingWrite, { event: 'session.compact' }),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe('register', () => {
+  it('logs a session.start marker so an unregistered plugin is detectable by its absence', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const on = ((pattern: string, ...rest: unknown[]) => {
+      handlers.set(pattern, rest[rest.length - 1] as (...args: unknown[]) => unknown);
+    }) as unknown as Parameters<typeof register>[0];
+    register(on, {});
+
+    const files = new Map<string, string>();
+    const $ = {
+      fs: {
+        read: async (path: string) => {
+          const text = files.get(path);
+          if (text === undefined) throw new Error('not found');
+          return text;
+        },
+        write: async (path: string, text: string) => {
+          files.set(path, text);
+        },
+      },
+    };
+    const event = { cwd: '/repo', surface: 'terminal', isInteractive: true };
+    const next = async (e: unknown) => e;
+    await handlers.get('session.start')!($, event, next);
+
+    const line = JSON.parse((files.get(HOOK_LOG_PATH) ?? '').trim());
+    expect(line).toMatchObject({ event: 'session.start', cwd: '/repo', surface: 'terminal', isInteractive: true });
+  });
+
+  it('tags every session.compact log line with $.session.id(), so it can be joined against the transcript later', async () => {
+    const handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const on = ((pattern: string, ...rest: unknown[]) => {
+      handlers.set(pattern, rest[rest.length - 1] as (...args: unknown[]) => unknown);
+    }) as unknown as Parameters<typeof register>[0];
+    register(on, {});
+
+    const files = new Map<string, string>();
+    const $ = {
+      fs: {
+        read: async (path: string) => {
+          const text = files.get(path);
+          if (text === undefined) throw new Error('not found');
+          return text;
+        },
+        write: async (path: string, text: string) => {
+          files.set(path, text);
+        },
+      },
+      session: { id: async () => 'sess-abc123' },
+      env: { get: async () => undefined },
+      settings: { read: async () => ({}) },
+      ui: { log: () => {}, toast: () => {} },
+      http: {
+        fetch: jevFetch((name) => (name === 'call_t2' || name === 'result_t2' ? 0.9 : 0.1)),
+      },
+    };
+    const event = { messages: transcript(), trigger: 'auto' };
+    const next = async (e: unknown) => e;
+    await handlers.get('session.compact')!($, event, next);
+
+    const line = JSON.parse((files.get(HOOK_LOG_PATH) ?? '').trim());
+    expect(line).toMatchObject({ event: 'session.compact', sessionId: 'sess-abc123' });
   });
 });
 

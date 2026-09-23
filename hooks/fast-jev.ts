@@ -261,6 +261,18 @@ export function decisionLogLines(
   );
 }
 
+/** `$.session.usage()`'s context reading, best-effort: never throws, absent on any failure. */
+async function sessionContextUsage($: {
+  session: { usage: () => Promise<{ context: { tokens?: number; percent?: number } }> };
+}): Promise<{ tokens?: number; percent?: number } | undefined> {
+  try {
+    const { context } = await $.session.usage();
+    return { tokens: context.tokens, percent: context.percent };
+  } catch {
+    return undefined;
+  }
+}
+
 async function getApiKey(
   $: {
     env: { get: (name: string) => Promise<string | undefined> };
@@ -297,7 +309,26 @@ export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
 
+  on('session.start', async ($, event, next) => {
+    await appendHookLog(
+      (p) => $.fs.read(p),
+      (p, t) => $.fs.write(p, t),
+      {
+        event: 'session.start',
+        cwd: event.cwd,
+        surface: event.surface,
+        isInteractive: event.isInteractive,
+      },
+    );
+    return next(event);
+  });
+
   on('session.compact', async ($, event, next) => {
+    const sessionId = await $.session.id().catch(() => undefined);
+    // Read before any compaction work: the hook only returns replacement messages,
+    // the host swaps them in after we return, so this is the last point at which
+    // "before" and "after" would actually differ.
+    const contextBefore = await sessionContextUsage($);
     try {
       const config = { ...configured, apiKey: await getApiKey($, configured) };
       const { result, messages } = await compactSession(event.messages, config, async (url, init) => {
@@ -312,10 +343,20 @@ export const register: Register = (on: On, options: PluginOptions) => {
           (p, t) => $.fs.write(p, t),
           {
             event: 'session.compact',
+            sessionId,
             verdict: 'fallback_low_reduction',
             reductionRatio: ratio,
             minReductionRatio: config.minReductionRatio,
             messagesBefore: event.messages.length,
+            decisions: result.decisions
+              .filter((d) => d.reason !== 'pinned')
+              .map((d) => ({
+                id: d.id,
+                tool: d.tool,
+                action: d.action,
+                keepCall: d.keepCall,
+                keepResult: d.keepResult,
+              })),
           },
         );
         notify(
@@ -329,10 +370,13 @@ export const register: Register = (on: On, options: PluginOptions) => {
         (p, t) => $.fs.write(p, t),
         {
           event: 'session.compact',
+          sessionId,
           verdict: 'compacted',
           reductionRatio: ratio,
           messagesBefore: event.messages.length,
           messagesAfter: messages.length,
+          contextPercentBefore: contextBefore?.percent,
+          contextTokensBefore: contextBefore?.tokens,
           decisions: result.decisions
             .filter((d) => d.reason !== 'pinned')
             .map((d) => ({
@@ -355,6 +399,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
         (p, t) => $.fs.write(p, t),
         {
           event: 'session.compact',
+          sessionId,
           verdict: 'fallback_error',
           error: error instanceof Error ? error.message : String(error),
         },
@@ -369,6 +414,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('turn.complete', async ($, event: TurnCompleteInput, next) => {
     if (compacting) return next(event);
+    const sessionId = await $.session.id().catch(() => undefined);
     try {
       const { context } = await $.session.usage();
       if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);
@@ -378,13 +424,40 @@ export const register: Register = (on: On, options: PluginOptions) => {
         (p, t) => $.fs.write(p, t),
         {
           event: 'turn.complete',
+          sessionId,
           verdict: 'triggered_compact',
           contextPercent: context.percent,
           compactAtPercent: configured.compactAtPercent,
         },
       );
       await $.session.compact();
+      // $.session.compact() resolves once the host has applied whatever the
+      // session.compact hook returned, so this is the actual post-compaction
+      // reading -- unlike anything read from inside that hook, which runs
+      // before the swap.
+      const after = await sessionContextUsage($);
+      await appendHookLog(
+        (p) => $.fs.read(p),
+        (p, t) => $.fs.write(p, t),
+        {
+          event: 'turn.complete',
+          sessionId,
+          verdict: 'compact_finished',
+          contextPercentAfter: after?.percent,
+          contextTokensAfter: after?.tokens,
+        },
+      );
     } catch (error) {
+      await appendHookLog(
+        (p) => $.fs.read(p),
+        (p, t) => $.fs.write(p, t),
+        {
+          event: 'turn.complete',
+          sessionId,
+          verdict: 'compact_failed',
+          error: error instanceof Error ? error.message : String(error),
+        },
+      );
       $.ui.log(
         `auto-compact skipped (${error instanceof Error ? error.message : String(error)})`,
       );
