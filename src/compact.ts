@@ -18,11 +18,13 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   goal: '',
   keepThreshold: 0.5,
   preserveRecentMessages: 6,
-  // Sized against reflex-serve's own default `--max-pack-tokens 8192` (a 12GB-GPU
-  // budget), not the old remote Jev API's 32k context; the old 25k/30k defaults
+  // Sized for a 12GB GPU running reflex-serve with `--max-pack-tokens 192` and
+  // `--state-cache-entries 2`: the state's KV cache is copied once per question
+  // branch in a chunk, so its size, not the question count, sets the OOM line.
+  // 8k fits ~115 candidate calls; the old 25k/30k (remote Jev's 32k context)
   // packed one giant request that reflex-serve rejected with a 529 OOM.
-  maxStateTokens: 4_000,
-  maxRequestTokens: 6_000,
+  maxStateTokens: 8_000,
+  maxRequestTokens: 10_000,
   truncateHeadChars: 300,
 };
 

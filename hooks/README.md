@@ -53,8 +53,8 @@ The plugin declares these `userConfig` values in
 | `preserveRecentMessages` | `6` |
 | `compactAtPercent` | `60` |
 | `minReductionRatio` | `0.25` |
-| `maxStateTokens` | `4000` |
-| `maxRequestTokens` | `6000` |
+| `maxStateTokens` | `8000` |
+| `maxRequestTokens` | `10000` |
 | `truncateHeadChars` | `300` |
 | `model` | `Qwen/Qwen3.5-4B` |
 
@@ -65,7 +65,7 @@ server.
 
 Every option except `apiKey`, `compactAtPercent`, `minReductionRatio` and
 `model` is passed straight to the library; see the root README for what they
-do. The `session.compact` hook runs the reflex requests concurrently. If
+do. The `session.compact` hook runs the reflex requests one at a time. If
 reflex fails, the response is malformed, the history cannot be
 fitted into the state budget, or the estimated reduction is below
 `minReductionRatio`, the hook logs a fallback and delegates to Claude Code's

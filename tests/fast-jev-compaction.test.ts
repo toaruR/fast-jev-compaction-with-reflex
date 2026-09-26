@@ -75,8 +75,8 @@ describe('options', () => {
     expect(resolveOptions()).toMatchObject({
       keepThreshold: 0.5,
       preserveRecentMessages: 6,
-      maxStateTokens: 4_000,
-      maxRequestTokens: 6_000,
+      maxStateTokens: 8_000,
+      maxRequestTokens: 10_000,
       truncateHeadChars: 300,
     });
     expect(resolveOptions({

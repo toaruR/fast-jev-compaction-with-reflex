@@ -58,9 +58,9 @@ built-in compaction summary with the original messages.
    **result** stay verbatim (its contents are still needed and re-running the
    tool would not do).
 5. Questions are split into as many requests as needed so state plus questions
-   stays under `maxRequestTokens` (6k by default, under reflex-serve's default
-   `--max-pack-tokens 8192`). The same full state is resent with every
-   request; requests run concurrently and their answers are merged.
+   stays under `maxRequestTokens` (10k by default). The same full state is
+   resent with every request; requests run one at a time (reflex-serve
+   serializes them anyway) and their answers are merged.
 6. Decisions per call, against `keepThreshold`:
    - `keepResult ≥ threshold` → keep call and result;
    - else `keepCall ≥ threshold` → keep the call, truncate the result to its
@@ -83,7 +83,7 @@ cd fast-jev-compaction-with-reflex
 npm install
 npm run build
 
-cd reflex && uv sync && uv run reflex-serve --stable   # once, in another shell
+cd reflex && uv sync && uv run reflex-serve --stable --max-pack-tokens 192 --state-cache-entries 2   # once, in another shell
 ```
 
 ```ts
@@ -131,8 +131,8 @@ in a source file.
 | `goal` | last 3 user prompts | Ongoing task description included in the state |
 | `keepThreshold` | `0.5` | Minimum keep probability for a call or result to stay |
 | `preserveRecentMessages` | `6` | Newest messages never touched (the first is always kept) |
-| `maxStateTokens` | `4000` | Estimated token ceiling for the state |
-| `maxRequestTokens` | `6000` | Estimated ceiling for state plus one batch of questions |
+| `maxStateTokens` | `8000` | Estimated token ceiling for the state |
+| `maxRequestTokens` | `10000` | Estimated ceiling for state plus one batch of questions |
 | `truncateHeadChars` | `300` | Characters of a dropped tool result retained before its note |
 
 `result.stats` reports message and character counts before and after, the
@@ -166,7 +166,7 @@ opt-in flag must be set wherever Claude Code runs, e.g. in `~/.claude/settings.j
 { "env": { "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1" } }
 ```
 
-Then start `reflex-serve` locally (`cd reflex && uv run reflex-serve --stable`)
+Then start `reflex-serve` locally (`cd reflex && uv run reflex-serve --stable --max-pack-tokens 192 --state-cache-entries 2`)
 and add this local checkout as a plugin marketplace, either from the shell or
 as slash commands inside a session:
 

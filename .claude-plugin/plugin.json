@@ -37,14 +37,14 @@
     "maxStateTokens": {
       "type": "number",
       "title": "Maximum reflex state tokens",
-      "description": "Estimated token budget for the conversation state sent with every reflex request.",
-      "default": 25000
+      "description": "Estimated token budget for the conversation state sent with every reflex request. The state's KV cache is copied per question branch on the GPU, so this, not the question count, decides a 529 OOM; 8000 fits a 12GB GPU with reflex-serve --max-pack-tokens 192 --state-cache-entries 2. Longer histories fall back to the built-in summary.",
+      "default": 8000
     },
     "maxRequestTokens": {
       "type": "number",
       "title": "Maximum reflex request tokens",
-      "description": "Estimated token budget for state plus questions in one reflex request.",
-      "default": 30000
+      "description": "Estimated token budget for state plus questions in one reflex request; the questions are split across as many requests as this requires.",
+      "default": 10000
     },
     "truncateHeadChars": {
       "type": "number",
