@@ -23,25 +23,25 @@
 - 注意: サンプル 17 件の合成データのみ。実セッションでの検証は未実施（下記の既存ダンプ再生はサービング側のハングで中断）。
 
 ## reflex で lev を使う手順
-`reflex-serve --adapter interfaze-ai/lev` をそのまま使うと **アダプタが一切適用されない**（`CLAUDE.md` ハマりポイント参照）。キーを変換したローカルコピーを作って渡す:
-
-```python
-from huggingface_hub import hf_hub_download
-from safetensors.torch import load_file, save_file
-import shutil, os
-out = "runs/lev-mm"; os.makedirs(out, exist_ok=True)
-sd = load_file(hf_hub_download("interfaze-ai/lev", "adapter_model.safetensors"))
-sd = {k.replace("base_model.model.model.layers.", "base_model.model.model.language_model.layers."): v for k, v in sd.items()}
-save_file(sd, f"{out}/adapter_model.safetensors", metadata={"format": "pt"})
-shutil.copy(hf_hub_download("interfaze-ai/lev", "adapter_config.json"), f"{out}/adapter_config.json")
-```
+reflex（`de9c1b0` より後）の `Engine.load` がキー名の不一致と calibration 形式の違いを吸収するので、hub id をそのまま渡せばよい:
 
 ```bash
-uv run reflex-serve --max-pack-tokens 640 --adapter runs/lev-mm
+uv run reflex-serve --adapter interfaze-ai/lev --max-pack-tokens 192 --state-cache-entries 2
 ```
 
-- lev の `calibration.json` は形式（`temperatures` キー、`noul:A` 等）が reflex の `Calibration`（`temperature` キー）と非互換。そのまま隣に置くと `KeyError` になるので置かない（上記では温度 1.0 で評価）。
+- `_merge_adapter`（`reflex/src/reflex/engine.py`）が、テキスト用 causal LM で学習された `base_model.model.model.layers.*` を VL モデルの `...model.language_model.layers.*` に読み替えてから merge する。それでもどのモジュールにも当たらない重みが残れば起動を拒否する（以前は peft の警告だけ出てベースモデルのまま黙って起動していた）。起動ログに `renamed text-model layer keys` が出ていれば適用済み。
+- lev の `calibration.json`（`temperatures` キー、lev の rating readout 用の温度）は reflex の yes/no readout には合わないため、`Calibration.load` が警告を出して無視し、温度 1.0 で動く（上表の評価条件と同じ）。
 - reflex のプロンプトは lev の学習形式（chat + 0〜8 rating）と異なる yes/no readout だが、それでも上表の通り分離できた。
+- `--stable` は付けない。`serving/stable.json` はベースモデル用の設定で、`permutations: 2`（分岐数・処理時間が 2 倍）になり、この構成では未計測。
+
+## 8000 トークン state での実測（2026-09-26、RTX 3060 12GB、`--max-pack-tokens 192 --state-cache-entries 2`）
+
+| 構成 | 待機時 VRAM | ピーク VRAM | 32 問 1 バッチ（初回 / 2 回目以降） |
+|---|---|---|---|
+| ベースモデル | 8,777MiB | 11,197MiB | 7.2〜8.3s / 2.6〜3.5s |
+| + lev | 8,983MiB | 11,239MiB（6 セッション連続で頭打ち） | 7.2〜8.0s / 2.5〜3.5s |
+
+merge 後の `torch.cuda.empty_cache()` 無しだと待機時が 9,343MiB（+566MB）になっていた。合成セッション 155 call での p(keep) 分布: ベースは call 0.44〜0.76・result 0.35〜0.62（10〜12 種類の値しか出ない）、lev は call 0.03〜0.29・result 0.04〜0.92（20〜44 種類）。
 
 ## lev 本家サーバを動かす場合のメモ
 - デフォルト `prefix_mode="single"` は state 全文 ×（質問数×2 順序）行を一括バッチし全語彙 logits を持つため、12GB では VRAM 溢れ → WDDM の sysmem fallback で 5 分超ハング。`DecisionEngine` の config を `prefix_mode="fork"` に差し替える必要がある（CLI フラグ無し）。

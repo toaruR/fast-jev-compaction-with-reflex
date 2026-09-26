@@ -5,15 +5,13 @@
 > [reflex](reflex/) server — no API key or external network call required.
 
 > [!WARNING]
-> The default `reflex-serve` setup (frozen `Qwen/Qwen3.5-4B`, no LoRA adapter,
-> no calibration file) has **not** been shown to distinguish stale from needed
-> tool calls: a synthetic-transcript test with deliberately redundant content
-> still scored every candidate above `keepThreshold`, and `keepResult` values
-> repeat identically to six decimal places across unrelated sessions. In
-> practice `/compact` mostly falls back to Claude Code's built-in summary
-> (`reductionRatio` below the 0.25 minimum). See
-> [`docs/specification.md` §6.3](docs/specification.md) for the evidence;
-> `--adapter`/`--calibration` (untested here) may fix this.
+> Serve reflex with the [`interfaze-ai/lev`](https://huggingface.co/interfaze-ai/lev)
+> LoRA adapter (the commands below do). The bare `Qwen/Qwen3.5-4B` scores
+> nearly every candidate above `keepThreshold`, so `/compact` falls back to
+> Claude Code's built-in summary; with lev, stale and needed calls separate
+> around 0.5 and history actually shrinks. The evidence is in
+> [`docs/lev-evaluation.md`](docs/lev-evaluation.md) (17 labelled synthetic
+> calls; not yet checked on real sessions).
 
 Claude Code plugin that replaces the compaction summary with Jev-style
 decisions from a local [reflex](reflex/) server: every tool call and result is
@@ -83,7 +81,7 @@ cd fast-jev-compaction-with-reflex
 npm install
 npm run build
 
-cd reflex && uv sync && uv run reflex-serve --stable --max-pack-tokens 192 --state-cache-entries 2   # once, in another shell
+cd reflex && uv sync && uv run reflex-serve --adapter interfaze-ai/lev --max-pack-tokens 192 --state-cache-entries 2   # once, in another shell
 ```
 
 ```ts
@@ -166,7 +164,7 @@ opt-in flag must be set wherever Claude Code runs, e.g. in `~/.claude/settings.j
 { "env": { "CLAUDE_CODE_ENABLE_FUNCTION_HOOKS": "1" } }
 ```
 
-Then start `reflex-serve` locally (`cd reflex && uv run reflex-serve --stable --max-pack-tokens 192 --state-cache-entries 2`)
+Then start `reflex-serve` locally (`cd reflex && uv run reflex-serve --adapter interfaze-ai/lev --max-pack-tokens 192 --state-cache-entries 2`)
 and add this local checkout as a plugin marketplace, either from the shell or
 as slash commands inside a session:
 
